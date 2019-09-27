@@ -18,6 +18,8 @@ else:
     !unzip -o Train.zip
     os.chdir('/content/drive/My Drive/Colab Notebooks/DF/clound/')
 
+    
+    
 import tensorflow as tf
 import numpy as np
 import keras
@@ -32,17 +34,15 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 Train_Img_Dir = 'trainImg/'
 Train_Label_Path = 'Train_label.csv'
 Test_Img_Dir = 'testImg/'
-TFRecords_File = 'train.tfrecords'
+TS_TFRecords_File = 'train_single.tfrecords' #单标签的图片tfrecoard
+TM_TFRecords_File = 'train_multi.tfrecords' #多标签的图片tfrecoard
 submit_File = 'submit_example.csv'
 
-CLASSES_num = 30 # 分类网络的类别数目，也是网络最后一层的单元数目
 X_shape = [500, 500, 3] # 预处理后图像的大小
 EPOCH = 100 # 训练多少轮
 Batch_size = 128  # 训练的batch size
 
 # tf.enable_eager_execution() #调试用
-
-
 
 
 def read_image(name, type):
@@ -65,20 +65,35 @@ def read_image(name, type):
 
 class DatasetGenerator:
     def __init__(self):
-        self.train_labels = self._get_train_label() #获取图片名列表
-        self.train_num = len(self.train_labels) #图片总数
+        self.tls = self._get_train_label() #获取训练图片名列表
+        #获取单标签的训练图片名和label列表
+        self.train_single_labels = self.tls[self.tls.apply(lambda x: len(x['Code'])<=2, axis=1)] 
+        self.train_single_num = len(self.train_single_labels) #图片总数
+        #获取多标签的训练图片名和label列表(label长度2个以上)
+        self.train_multi_labels = self.tls[self.tls.apply(lambda x: len(x['Code'])>2, axis=1)]  
+        self.train_multi_num = len(self.train_multi_labels) #图片总数
+        #单标签 标签类别数目，也是网络最后一层的单元数目
+        self.single_class_num = len(self.train_single_labels['Code'].unique()) 
 
-    def write2TFRecoard(self, tfr_file=TFRecords_File, start=0, end=None, option=None):
+    def write2TFRecoard(self, type, start=0, end=None, option=None):
         """
         #把图片生成TFRecords文件
-        tfr_file: TFRecord文件的存放路径
+        type: TFRecord文件的存放路径
         start, end: 保存图片的
         option: TFRecord文件保存的压缩格式
         """
-        #start end参数检查 但是超出index范围没关系 
+        #待写 start end参数检查 但是超出index范围没关系 
+        if type == 'single': #选择的是单标签的图片
+            tfr_file = TS_TFRecords_File
+            nls = self.train_single_labels[start:end]
+        elif type == 'multi':
+            tfr_file = TM_TFRecords_File
+            nls = self.train_multi_labels[start:end]
+
         trf_writer = tf.python_io.TFRecordWriter(tfr_file, options=option)
 
-        for index, (name, label) in dg.train_labels[start:end].iterrows():
+        nls = nls.sample(frac=1).reset_index(drop=True)    #打乱顺序 frac是要返回的比例 1=100%
+        for index, (name, label) in nls.iterrows():
             img = read_image(name, 'train')
             img_shape = img.shape
             img = img.reshape(-1) #变成一维
@@ -92,11 +107,12 @@ class DatasetGenerator:
             #使用tf.train.Example将features编码数据封装成特定的PB协议格式
             example = tf.train.Example(features=tf.train.Features(feature=feature_internal))
             #将序列化为字符串的example数据写入协议缓冲区
+            print('No.{}: trf_writer写入{} label:{}'.format(index, name, label))
             trf_writer.write(example.SerializeToString())
         #关闭TFRecords文件操作接口    
         trf_writer.close()
 
-    def get_from_TFRecoard(self, tfr_files=TFRecords_File):
+    def get_from_TFRecoard(self, tfr_files=TS_TFRecords_File):
         """
         ##从tfr_files指定的TFRecords文件，初始化一个dataset
         :param tfr_files: TFRecords文件路径
@@ -104,6 +120,7 @@ class DatasetGenerator:
         """
         # 定义TFRecordDataset
         dataset = tf.data.TFRecordDataset(tfr_files) #默认一个文件
+        dataset = dataset.shuffle(buffer_size=1000)
         #执行解析函数 得到数据集    
         dataset = dataset.map(self.__parse_function)
         # # 定义batch size大小，非常重要。
@@ -155,4 +172,12 @@ class DatasetGenerator:
             img = read_image(name, 'train')
             yield(img, label)
 
+            
+# 以下测试
+dg = DatasetGenerator()
+sess = tf.InteractiveSession() 
+sess.run(tf.global_variables_initializer())
 
+dg.write2TFRecoard(type='single') #写入到tfrecoard
+
+            
