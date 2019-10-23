@@ -211,30 +211,46 @@ class Pre_Model:
     def __init__(self):
         print('使用了预训练模型')
         self.vgg16_para = (18, (13, 13, 512))  #最后输出
+        self.resnet50_para = (174, (13, 13, 2048))
+        self.model_input = Input(shape=X_SHAPE) 
 
     def vgg16(self):
-        """
-        @ 创建 模型
-        :param
-            None 
-        :return 
-            model
-        """
-        model_input = Input(shape=X_SHAPE)         
+        """@ VGG16 预训练模型"""
         #先加载预定义的模型
         base_model = vgg16.VGG16(include_top=False,
                         weights='imagenet',
-                        input_tensor=model_input,
+                        input_tensor=self.model_input,
                         )
+        return self.__common(base_model, 'vgg16')        
+        
+    def resnet50(self):
+        base_model = resnet50.ResNet50(
+                        include_top=False,
+                        weights='imagenet',
+                        input_tensor=self.model_input,
+                        )
+        return self.__common(base_model, 'resnet50')        
+        
+        
+    def __common(self, base_model, name):            
+        """
+        @ 预训练模型 输出层自定义的
+        :Args
+            base_model: 输入的model
+            name: model名字
+        :return 
+            model(输出层是自己选择的)
+        """
         for layer in base_model.layers[:]:
             layer.trainable = False  #darknet部分 权重不训练
 #         base_model.summary()
 #         for i, layer in enumerate(base_model.layers):
 #             print(i, layer)
         #输出的层
-        predictions = base_model.layers[self.vgg16_para[0]].output
-        model = Model(model_input, predictions)
-        print('加载了预训练模型 【 vgg16】')
+        out_layer = eval('self.' + name + '_para[0]')
+        predictions = base_model.layers[out_layer].output
+        model = Model(self.model_input, predictions)
+        print('加载了预训练模型 【 {}】 输出第【{}】层'.format(name, out_layer))
         return model
 
 
@@ -285,7 +301,7 @@ class DatasetGenerator:
         self.xm_NLs, self.vm_NLs = self.__get_train_NLs('multi')
          
         #检查文件夹的tfrecoard文件，若没有则生成新的
-#         self.check_tfrecoard()
+        self.check_tfrecoard()
         
         #计算step_per_epoch  fit时候用
         self.__calc_step_per_epoch()
@@ -373,7 +389,7 @@ class DatasetGenerator:
                     if self.model:  #如果有预训练模型
                         img = np.expand_dims(img, 0)
                         output = self.model.predict(img)
-#                         print(output[0, 0,0, :15])
+#                         print(output.shape, output[0, 0,0, :15])
                         image = output.reshape(-1)
 #                         print('预训练后，', output.shape, image.shape)
                     else:
@@ -975,13 +991,7 @@ class MyModel():
         # 构建我们需要训练的完整模型
         model = Model(model_input, predictions)
         model.load_weights('backup/weights-1244221-27-0.386.hdf5', by_name=True)
-
-
-        # 编译模型（一定要在锁层以后操作）
-        model.compile(optimizer=keras.optimizers.Adam(learning_rate=4e-3), #微调时考虑 (lr=1e-4)
-               loss='categorical_crossentropy',
-               metrics=['acc'],
-               )            
+          
         return model
 
     def create_model_1(self):
@@ -1021,14 +1031,6 @@ class MyModel():
         predictions = Dense(CLASS_NUM, activation='softmax')(x)
         # 构建我们需要训练的完整模型
         model = Model(model_input, predictions)
-        # model.load_weights('backup/weights-1244221-04-0.283.hdf5', by_name=True)
-
-
-        # 编译模型（一定要在锁层以后操作）
-        model.compile(optimizer=keras.optimizers.Adam(learning_rate=4e-3),
-               loss='categorical_crossentropy',
-               metrics=['acc'],
-               )            
         return model
 
     def create_pre_model(self):
@@ -1037,22 +1039,16 @@ class MyModel():
         """
         para = Pre_Model().vgg16_para
         model_input = Input(shape=para[1]) 
-        #vgg16  第五 第四 第三层输出
-#         x5, x4, x3 = self.seperate_pre_model_tensor('vgg16', model_input)
-#         print(x5, x4, x3)
-        x = self.__Conv2D_BN(model_input, 256, (1,1), name='pre_conv2d_bn_1') 
-        x = self.__Conv2D_BN(model_input, 128, (1,1), name='pre_conv2d_bn_2') 
+        x = DepthwiseConv2D((5,5), strides=3)(model_input)
+        x = BatchNormalization()(x)
+        x = LeakyReLU(alpha=0.1)(x)
+        x = self.__Conv2D(x, 128, (1,1))
+ 
         x = Flatten()(x)   
+        x = Dense(64)(x)
         predictions = Dense(CLASS_NUM, activation='softmax', name='pre_softmax')(x)
         model = Model(model_input, predictions)
-#         model.load_weights('backup/weights-1244221-27-0.386.hdf5', by_name=True)
-        # 编译模型 
-        model.compile(optimizer=keras.optimizers.Adam(learning_rate=4e-3), #微调时考虑 (lr=1e-4)
-               loss='categorical_crossentropy',
-               metrics=['acc'],
-               )            
         return model           
-        
         
     def create_model_2(self):
         """
@@ -1064,10 +1060,6 @@ class MyModel():
         """
         model_input = Input(shape=X_SHAPE) 
         #先加载预定义的模型
-#         base_model = vgg16.VGG16(include_top=False,
-#                         weights='imagenet',
-#                         input_tensor=model_input,
-#                         )
         base_model = resnet50.ResNet50(
                         include_top=False,
                         weights='imagenet',
@@ -1090,12 +1082,6 @@ class MyModel():
         x = Flatten()(x)   
         predictions = Dense(CLASS_NUM, activation='softmax', name='softmax1')(x)
         model = Model(model_input, predictions)
-#         model.load_weights('backup/weights-1244221-27-0.386.hdf5', by_name=True)
-        # 编译模型 
-        model.compile(optimizer=keras.optimizers.Adam(learning_rate=4e-3), #微调时考虑 (lr=1e-4)
-               loss='categorical_crossentropy',
-               metrics=['acc'],
-               )            
         return model        
 
     def create_model_easy(self):
@@ -1144,14 +1130,6 @@ class MyModel():
         predictions = Dense(CLASS_NUM, activation='softmax')(x)
         # 构建我们需要训练的完整模型
         model = Model(model_input, predictions)
-        # model.load_weights('backup/weights-1244221-04-0.283.hdf5', by_name=True)
-
-
-        # 编译模型（一定要在锁层以后操作）
-        model.compile(optimizer=keras.optimizers.Adam(learning_rate=5e-3),
-               loss='categorical_crossentropy',
-               metrics=['acc'],
-               )            
         return model
                 
     def load_weights(self, weights, by_name=True):
@@ -1163,6 +1141,16 @@ class MyModel():
         :return 
          """          
         self.model.load_weights(weights, by_name=by_name)
+
+    def compile(self):
+        """@ 编译模型 """
+        self.model.compile(
+                # optimizer=keras.optimizers.Adam(learning_rate=3e-3), #微调时考虑 (lr=1e-4)
+                optimizer=keras.optimizers.SGD(lr=0.01),
+                # optimizer=keras.optimizers.Adadelta(lr=1.0),
+                loss='categorical_crossentropy',
+                metrics=['acc'],
+                )             
 
     def fit(self, xs, vs, ratio=1):
         """
@@ -1181,7 +1169,7 @@ class MyModel():
         early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1)
         #checkpoint保存
         checkpoint = ModelCheckpoint(filepath= 'backup/weights-vgg16-{epoch:02d}-{val_acc:.3f}.hdf5', #文件路径
-                                verbose= 1,
+                                verbose= 2,
                                 save_weights_only = True,
                                 mode = 'max',
 #                                 load_weights_on_restart = True,
@@ -1221,16 +1209,11 @@ class MyModel():
             result: [[]] (batch,classNum) 
         """ 
         if self.model_name:  #有预加载模型 先处理成模型的输出
-            para = eval('Pre_Model().' + self.model_name + '_para')
-            model_input = Input(shape=X_SHAPE)
-            if self.model_name == 'vgg16':
-                base_model = vgg16.VGG16(include_top=False,
-                                        weights='imagenet',
-                                        input_tensor=model_input,
-                                        )
-                predictions = base_model.layers[para[0]].output
-                model = Model(model_input, predictions)
-                pre_x = model.predict(x)        
+            pre_model = Pre_Model()
+            para = eval('pre_model.' + self.model_name + '_para')
+            #调用生成tfrecoard同一个model接口
+            base_model = eval('pre_model.' + self.model_name + '()')
+            pre_x = base_model.predict(x)        
         else:
             pre_x = x
                     
@@ -1411,7 +1394,7 @@ if __name__ == '__main__':
 #     t, l  = iterator.get_next()
 #     print('dddddddd', t.shape, l.shape)
 #     
-    m = MyModel()
+#     m = MyModel()
 #     m.model.summary()
 
 #     m.test_pre_model(XS_dataset)
@@ -1423,7 +1406,8 @@ if __name__ == '__main__':
 #     ret.to_csv('lib/submit.csv', index=False)  #生成csv文件
     
 #     m.load_weights(weights)
-#     m.fit(XS_dataset, VS_dataset, ratio=0.2)
+#     m.compile()
+#     m.fit(XS_dataset, VS_dataset, ratio=0.15)
 #     m.evaluate(XS_dataset)
     
     
@@ -1431,9 +1415,9 @@ if __name__ == '__main__':
     
 #     t = m.model.evaluate(VS_dataset, verbose=1, steps=STEP_PER_EPOCH['vs'],)
     
-    print('在训练集上predict 验证一下：')
-    df = dg.get_NLs('xs')
-    show_predict(m, df, 100)  
+#     print('在训练集上predict 验证一下：')
+#     df = dg.get_NLs('xs')
+#     show_predict(m, df, 100)  
 
 
     def move_multi_img():
