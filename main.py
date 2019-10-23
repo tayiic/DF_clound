@@ -36,6 +36,7 @@ def timeit(func):
 TRAIN_IMG_DIR = 'trainImg/' #训练图片的目录
 TEST_IMG_DIR = 'testImg/'  #测试图片的目录
 TEST_LIST_FILE = 'lib/submit_example.csv' #test图片文件名和label的列表文件
+PRE_MODEL = 'vgg16'  #预训练数据输出model None表示不用
 X_SHAPE = [416, 416, 3] # 预处理后图像的大小
 CLOUND = {    #编号（type）  云状类型
     0:'不是云', # 
@@ -743,8 +744,12 @@ def showinfo(func):
 
 class MyModel():
     def __init__(self):
-        self.model = self.create_model_vgg16_base() 
-
+        self.model_name = PRE_MODEL  #预训练数据输出model None表示不用
+        if PRE_MODEL:
+            self.model = self.create_pre_model() 
+        else:
+            self.model = self.create_model_easy()   
+                
     """
     model的组件
     """
@@ -1026,15 +1031,19 @@ class MyModel():
                )            
         return model
 
-    def create_model_vgg16_base(self):
+    def create_pre_model(self):
+        """
+        @ 此模型输入是 ：通过预训练模型处理后的输出
+        """
         para = Pre_Model().vgg16_para
         model_input = Input(shape=para[1]) 
         #vgg16  第五 第四 第三层输出
 #         x5, x4, x3 = self.seperate_pre_model_tensor('vgg16', model_input)
 #         print(x5, x4, x3)
-         
-        x = Flatten()(model_input)   
-        predictions = Dense(CLASS_NUM, activation='softmax', name='softmax1')(x)
+        x = self.__Conv2D_BN(model_input, 256, (1,1), name='pre_conv2d_bn_1') 
+        x = self.__Conv2D_BN(model_input, 128, (1,1), name='pre_conv2d_bn_2') 
+        x = Flatten()(x)   
+        predictions = Dense(CLASS_NUM, activation='softmax', name='pre_softmax')(x)
         model = Model(model_input, predictions)
 #         model.load_weights('backup/weights-1244221-27-0.386.hdf5', by_name=True)
         # 编译模型 
@@ -1203,7 +1212,7 @@ class MyModel():
                 steps= STEP_PER_EPOCH['vs'],
                 )
     
-    def predict(self, x):
+    def predict(self, x, steps=1):
         """
         @ predict
         :param
@@ -1211,9 +1220,21 @@ class MyModel():
         :return 
             result: [[]] (batch,classNum) 
         """ 
-        result = self.model.predict(x,
-                    # verbose=1,
-                    )
+        if self.model_name:  #有预加载模型 先处理成模型的输出
+            para = eval('Pre_Model().' + self.model_name + '_para')
+            model_input = Input(shape=X_SHAPE)
+            if self.model_name == 'vgg16':
+                base_model = vgg16.VGG16(include_top=False,
+                                        weights='imagenet',
+                                        input_tensor=model_input,
+                                        )
+                predictions = base_model.layers[para[0]].output
+                model = Model(model_input, predictions)
+                pre_x = model.predict(x)        
+        else:
+            pre_x = x
+                    
+        result = self.model.predict(pre_x)
         return result        
                 
     def pre_predict(self, files, weights=None):
@@ -1380,7 +1401,7 @@ def show_predict(model, df, num):
                 
                     
 if __name__ == '__main__':
-    dg = DatasetGenerator('vgg16', augmentation=1)
+    dg = DatasetGenerator(PRE_MODEL, augmentation=1)
 #     dg._test_read_write()
  
     XS_dataset = dg.read_data_from_TFRecoard('xs') #单label训练集
@@ -1402,7 +1423,7 @@ if __name__ == '__main__':
 #     ret.to_csv('lib/submit.csv', index=False)  #生成csv文件
     
 #     m.load_weights(weights)
-    m.fit(XS_dataset, VS_dataset, ratio=0.1)
+#     m.fit(XS_dataset, VS_dataset, ratio=0.2)
 #     m.evaluate(XS_dataset)
     
     
@@ -1410,9 +1431,9 @@ if __name__ == '__main__':
     
 #     t = m.model.evaluate(VS_dataset, verbose=1, steps=STEP_PER_EPOCH['vs'],)
     
-#     print('在训练集上predict 验证一下：')
-#     df = Pic.get_train_NLs('single')
-#     show_predict(m, df, 100)  
+    print('在训练集上predict 验证一下：')
+    df = dg.get_NLs('xs')
+    show_predict(m, df, 100)  
 
 
     def move_multi_img():
